@@ -36,10 +36,8 @@ class TypeCheckLvar:
         raise Exception('type_check_exp: unexpected ' + repr(e))
 
   def type_check_stmts(self, ss, env):
-    print(ss)
     if len(ss) == 0:
       return
-    print("hello", ss[0])
     match ss[0]:
       case Assign([Name(id)], value):
         t = self.type_check_exp(value, env)
@@ -55,8 +53,7 @@ class TypeCheckLvar:
       case Expr(value):
         self.type_check_exp(value, env)
         return self.type_check_stmts(ss[1:], env)
-      case rem:
-        print('rem', rem)
+      case _:
         raise Exception('type_check_stmts: unexpected ' + repr(ss))
 
   def type_check(self, p):

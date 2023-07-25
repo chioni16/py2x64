@@ -3,8 +3,8 @@ from ast import *
 from utils import *
 from x86_ast import *
 import os
-from typing import List, Tuple, Set, Dict
-from utils import generate_name
+from typing import List, Optional, Tuple, Set, Dict
+from utils import generate_name, label_name
 
 Binding = Tuple[Name, expr]
 Temporaries = List[Binding]
@@ -18,38 +18,43 @@ class Compiler:
 
     def rco_exp(self, e: expr, need_atomic: bool) -> Tuple[expr, Temporaries]:
         match e:
-            case Constant(_) | Name(_) | Call(Name('input_int'),[]):
+            case Constant(_) | Name(_):
+                return e, []
+            case Call(Name('input_int'),[]):
+                if need_atomic:
+                    name = Name(generate_name('temp'))
+                    return name, [(name, Call(Name('input_int'),[]))]
                 return e, []
             case UnaryOp(USub(), exp):
-                inner_final_exp, inner_temps = self.rco_exp(exp, need_atomic)
+                inner_final_exp, inner_temps = self.rco_exp(exp, True)
                 match inner_final_exp:
-                    case Constant(_) | Name(_) | Call(Name('input_int'),[]):
+                    case Constant(_) | Name(_):
                         pass
                     case _:
                         inner_name = Name(generate_name('temp'))
                         inner_temps = inner_temps + [(inner_name, inner_final_exp)]
                         inner_final_exp = inner_name
                 return UnaryOp(USub(), inner_final_exp), inner_temps
-            case BinOp(left, Add(), right):
-                left_final_exp, left_temps = self.rco_exp(left, need_atomic)
+            case BinOp(left, op, right):
+                left_final_exp, left_temps = self.rco_exp(left, True)
                 match left_final_exp:
-                    case Constant(_) | Name(_) | Call(Name('input_int'),[]):
+                    case Constant(_) | Name(_):
                         pass
                     case _:
                         left_name = Name(generate_name('temp'))
                         left_temps = left_temps + [(left_name, left_final_exp)]
                         left_final_exp = left_name
 
-                right_final_exp, right_temps = self.rco_exp(right, need_atomic)
+                right_final_exp, right_temps = self.rco_exp(right, True)
                 match right_final_exp:
-                    case Constant(_) | Name(_) | Call(Name('input_int'),[]):
+                    case Constant(_) | Name(_):
                         pass
                     case _:
                         right_name = Name(generate_name('temp'))
                         right_temps = right_temps + [(right_name, right_final_exp)]
                         right_final_exp = right_name
 
-                return BinOp(left_final_exp, Add(), right_final_exp), left_temps + right_temps
+                return BinOp(left_final_exp, op, right_final_exp), left_temps + right_temps
 
 
 
@@ -62,15 +67,15 @@ class Compiler:
 
         match s:
             case Assign([Name(var)], exp):
-                final_exp, temps = self.rco_exp(exp, True)
+                final_exp, temps = self.rco_exp(exp, False)
                 return helper(temps) + [Assign([Name(var)], final_exp)]
             case Expr(Call(Name('print'),[exp])):
                 final_exp, temps = self.rco_exp(exp, True)
                 match final_exp:
-                    case Constant(_) | Name(_) | Call(Name('input_int'),[]):
+                    case Constant(_) | Name(_):
                         pass
                     case _:
-                        final_name = generate_name('temp')
+                        final_name = Name(generate_name('temp'))
                         temps = temps + [(final_name, final_exp)]
                         final_exp = final_name
                 return helper(temps) + [Expr(Call(Name('print'), [final_exp]))]
@@ -90,17 +95,65 @@ class Compiler:
     def select_arg(self, e: expr) -> arg:
         # YOUR CODE HERE
         pass        
+        
+    def select_atomic(self, exp: expr, dest: Optional[location]) -> Tuple[location, List[stmt]]:
+        stmts = []
+        match exp: 
+            case Constant(c):
+                dest = dest or Reg('rax')
+                stmts += [Instr('movq', [Immediate(c), dest])]
+            case Name(v):
+                dest = Variable(v)
+            case _:
+                raise Exception('unreachable!!')
+        return dest, stmts
+
+    def select_exp(self, e: expr, dest: Optional[location]) -> Tuple[location, List[stmt]]:
+        match e:
+            case Constant(c):
+                dest = dest or Reg('rax')
+                return dest, [Instr('movq', [Immediate(c), dest])]
+            case Name(v):
+                return Variable(v), []
+            case Call(Name('input_int'),[]):
+                return Reg('rax'), [Callq(label_name('read_int'), 0)]
+            case UnaryOp(USub(), exp):
+                dest, stmts = self.select_atomic(exp, dest)
+                stmts += [Instr('negq', [dest])]
+                return dest, stmts
+            case BinOp(left, op, right):
+                dest, stmts = self.select_atomic(left, dest)
+                op_str = ''
+                match op:
+                    case Add():
+                        op_str = 'addq'
+                    case Sub():
+                        op_str = 'subq'
+                match right: 
+                    case Constant(c):
+                        stmts += [Instr(op_str, [Immediate(c), dest])]
+                    case Name(v):
+                        stmts += [Instr(op_str, [Variable(v), dest])]
+                    case _:
+                        raise Exception('unreachable!!')
+                return dest, stmts
 
     def select_stmt(self, s: stmt) -> List[instr]:
-        # match s:
-        #     case Assign([Name(var)], exp):
-        #         Instr('movq', [, Variable(var)])
-        #         pass
-        #     case Expr(Call(Name('print'),[exp])):
-        #         pass
-        #     case Expr(exp):
-        #         pass
-        pass
+        match s:
+            case Assign([Name(var)], exp):
+                dest, stmts = self.select_exp(exp, Variable(var))
+                if not dest == Variable(var):
+                    stmts += [Instr('movq', [dest, Variable(var)])]
+                return stmts
+            case Expr(Call(Name('print'),[exp])):
+                dest, stmts = self.select_exp(exp, Reg('rdi'))
+                if not dest == Reg('rdi'):
+                    stmts += [Instr('movq', [dest, Reg('rdi')])]
+                stmts += [Callq(label_name('print_int'), 0)]
+                return stmts
+            case Expr(exp):
+                _, stmts = self.select_exp(exp, None)
+                return stmts
 
     def select_instructions(self, p: Module) -> X86Program:
         l = map(self.select_stmt, p.body) 
