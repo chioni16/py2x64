@@ -9,8 +9,9 @@ from utils import generate_name, label_name
 Binding = Tuple[Name, expr]
 Temporaries = List[Binding]
 
-
 class Compiler:
+    def __init__(self) -> None:
+        self.count = 0
 
     ############################################################################
     # Remove Complex Operands
@@ -165,44 +166,78 @@ class Compiler:
     ############################################################################
 
     def assign_homes_arg(self, a: arg, home: Dict[Variable, arg]) -> arg:
-        # YOUR CODE HERE
-        pass        
+        match a:
+            case Variable(v):
+                subst = home.get(a)
+                if subst:
+                    return subst
+                else:
+                    self.count += 1
+                    subst = Deref('rbp', -8 * self.count)
+                    home[a] = subst
+                    return subst
+            case rest:
+                return rest
 
     def assign_homes_instr(self, i: instr,
                            home: Dict[Variable, arg]) -> instr:
-        # YOUR CODE HERE
-        pass        
+        match i:
+            case Instr(op, args):
+                args = list(map(lambda a: self.assign_homes_arg(a, home), args))
+                return Instr(op, args)                
+            case rest:
+                return rest
 
     def assign_homes_instrs(self, ss: List[instr],
                             home: Dict[Variable, arg]) -> List[instr]:
-        # YOUR CODE HERE
-        pass        
+        return list(map(lambda s: self.assign_homes_instr(s, home), ss))
 
-    # def assign_homes(self, p: X86Program) -> X86Program:
-    #     # YOUR CODE HERE
-    #     pass        
+    def assign_homes(self, p: X86Program) -> X86Program:
+        self.count = 0
+        p.body = self.assign_homes_instrs(p.body, {})
+        return p
+
+        
 
     ############################################################################
     # Patch Instructions
     ############################################################################
 
     def patch_instr(self, i: instr) -> List[instr]:
-        # YOUR CODE HERE
-        pass        
+        match i:
+            case Instr(op, [Deref(s_reg, s_delta), Deref(d_reg, d_delta)]):
+                first = Instr('movq', [Deref(s_reg, s_delta), Reg('rax')])
+                second = Instr(op, [Reg('rax'), Deref(d_reg, d_delta)])
+                return [first, second]
+            case rest:
+                return [rest]
 
     def patch_instrs(self, ss: List[instr]) -> List[instr]:
-        # YOUR CODE HERE
-        pass        
+        patched_instrs = map(self.patch_instr, ss)
+        return [item for sl in patched_instrs for item in sl]
 
-    # def patch_instructions(self, p: X86Program) -> X86Program:
-    #     # YOUR CODE HERE
-    #     pass        
+    def patch_instructions(self, p: X86Program) -> X86Program:
+        p.body = self.patch_instrs(p.body)
+        return p
 
     ############################################################################
     # Prelude & Conclusion
     ############################################################################
 
-    # def prelude_and_conclusion(self, p: X86Program) -> X86Program:
-    #     # YOUR CODE HERE
-    #     pass        
+    def prelude_and_conclusion(self, p: X86Program) -> X86Program:
+        prolog = [
+            Instr('pushq', [Reg('rbp')]),
+            Instr('movq', [Reg('rsp'), Reg('rbp')]),
+            Instr('subq', [Immediate(8*self.count), Reg('rsp')])
+        ]
+
+        epilog = [
+            Instr('addq', [Immediate(8*self.count), Reg('rsp')]),
+            Instr('popq', [Reg('rbp')]),
+            Instr('retq', [])
+        ]
+
+        body = prolog + p.body + epilog
+
+        return X86Program(body)
 
