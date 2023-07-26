@@ -1398,6 +1398,56 @@ def compile_and_test(compiler, compiler_name,
             test_pass(passname, interp_dict, program_root, program,
                       compiler_name)
 
+    # from x86_ast import X86Program, Instr, Callq, Immediate, Variable, Reg
+    
+    # body = [
+    #     Instr('movq', [Immediate(1), Variable('v')]),
+    #     Instr('movq', [Immediate(42), Variable('w')]),
+    #     Instr('movq', [Variable('v'), Variable('x')]),
+    #     Instr('addq', [Immediate(7), Variable('x')]),
+    #     Instr('movq', [Variable('x'), Variable('y')]),
+    #     Instr('movq', [Variable('x'), Variable('z')]),
+    #     Instr('addq', [Variable('w'), Variable('z')]),
+    #     Instr('movq', [Variable('y'), Variable('temp_0')]),
+    #     Instr('negq', [Variable('temp_0')]),
+    #     Instr('movq', [Variable('z'), Variable('temp_1')]),
+    #     Instr('addq', [Variable('temp_0'), Variable('temp_1')]),
+    #     Instr('movq', [Variable('temp_1'), Reg('rdi')]),
+    #     Callq('print_int', 1)
+    # ]
+
+    # body1 = [
+    #     Instr('movq', [Immediate(1), Variable('v')]),
+    #     Instr('movq', [Immediate(42), Variable('w')]),
+    #     Instr('movq', [Variable('v'), Variable('x')]),
+    #     Instr('addq', [Immediate(7), Variable('x')]),
+    #     Instr('movq', [Variable('x'), Variable('y')]),
+    #     Instr('movq', [Variable('x'), Variable('z')]),
+    #     Instr('addq', [Variable('w'), Variable('z')]),
+    #     Instr('movq', [Variable('y'), Variable('tmp_0')]),
+    #     Instr('negq', [Variable('tmp_0')]),
+    #     Instr('movq', [Variable('z'), Variable('tmp_1')]),
+    #     Instr('addq', [Variable('tmp_0'), Variable('tmp_1')]),
+    #     Instr('movq', [Variable('tmp_1'), Reg('rdi')]),
+    #     Callq('print_int', 1),
+    # ]
+    # pro = X86Program(body1)
+    # d = compiler.uncover_live(pro)
+    # ug = compiler.build_interference(pro, d)
+    # from pprint import pprint
+    # pprint(d)
+    # with open('input.dot', 'w') as f:
+    #     f.write(ug.show().source)
+    # h, nsp = compiler.allocate_registers(ug)
+
+    # compiler.count = nsp
+    # body1 = compiler.assign_homes_instrs(body1, h)
+    # print('body1')
+    # print(X86Program(body1))
+    # print('patch instrs')
+    # p = compiler.patch_instructions(X86Program(body1))
+    # print(p)
+
     passname = 'assign_homes'
     if hasattr(compiler, passname):
         trace('\n# ' + passname + '\n')

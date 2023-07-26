@@ -4,7 +4,8 @@ import sys
 sys.path.append('../python-student-support-code')
 sys.path.append('../python-student-support-code/interp_x86')
 
-import compiler
+# import compiler
+from compiler_register_allocator import Compiler
 import interp_Lvar
 import type_check_Lvar
 from utils import run_tests, run_one_test, enable_tracing
@@ -12,7 +13,8 @@ from interp_x86.eval_x86 import interp_x86
 
 enable_tracing()
 
-compiler = compiler.Compiler()
+# compiler = compiler.Compiler()
+compiler = Compiler()
 
 typecheck_Lvar = type_check_Lvar.TypeCheckLvar().type_check
 

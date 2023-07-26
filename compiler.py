@@ -56,6 +56,8 @@ class Compiler:
                         right_final_exp = right_name
 
                 return BinOp(left_final_exp, op, right_final_exp), left_temps + right_temps
+            case _:
+                raise Exception('unreachable!')
 
 
 
@@ -83,6 +85,8 @@ class Compiler:
             case Expr(exp):
                 final_exp, temps = self.rco_exp(exp, True)
                 return helper(temps) + [Expr(final_exp)]
+            case _:
+                raise Exception('unreachable!')
 
     def remove_complex_operands(self, p: Module) -> Module:
         l = map(self.rco_stmt, p.body)
@@ -138,6 +142,8 @@ class Compiler:
                     case _:
                         raise Exception('unreachable!!')
                 return dest, stmts
+            case _:
+                raise Exception('unreachable!')
 
     def select_stmt(self, s: stmt) -> List[instr]:
         match s:
@@ -150,11 +156,13 @@ class Compiler:
                 dest, stmts = self.select_exp(exp, Reg('rdi'))
                 if not dest == Reg('rdi'):
                     stmts += [Instr('movq', [dest, Reg('rdi')])]
-                stmts += [Callq(label_name('print_int'), 0)]
+                stmts += [Callq(label_name('print_int'), 1)]
                 return stmts
             case Expr(exp):
                 _, stmts = self.select_exp(exp, None)
                 return stmts
+            case _:
+                raise Exception('unreachable!')
 
     def select_instructions(self, p: Module) -> X86Program:
         l = map(self.select_stmt, p.body) 

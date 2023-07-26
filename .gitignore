@@ -1,4 +1,7 @@
 **/__pycache__/
 /runtime.o
 tests/
-a.out
+**/*.out
+**/*.dot
+**/*.svg
+**/*.s
