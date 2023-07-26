@@ -101,39 +101,41 @@ class Compiler:
         # YOUR CODE HERE
         pass        
         
-    def select_atomic(self, exp: expr, dest: Optional[location]) -> Tuple[location, List[stmt]]:
+    def select_atomic(self, exp: expr, dest: location) -> List[stmt]:
         stmts = []
         match exp: 
             case Constant(c):
-                dest = dest or Reg('rax')
                 stmts += [Instr('movq', [Immediate(c), dest])]
             case Name(v):
-                dest = Variable(v)
+                stmts += [Instr('movq', [Variable(v), dest])]
             case _:
                 raise Exception('unreachable!!')
-        return dest, stmts
+        return stmts
 
     def select_exp(self, e: expr, dest: Optional[location]) -> Tuple[location, List[stmt]]:
+        dest = dest or Variable(generate_name('temp'))
+        # dest = dest or Reg('rax')
         match e:
             case Constant(c):
-                dest = dest or Reg('rax')
                 return dest, [Instr('movq', [Immediate(c), dest])]
             case Name(v):
                 return Variable(v), []
             case Call(Name('input_int'),[]):
                 return Reg('rax'), [Callq(label_name('read_int'), 0)]
             case UnaryOp(USub(), exp):
-                dest, stmts = self.select_atomic(exp, dest)
+                stmts = self.select_atomic(exp, dest)
                 stmts += [Instr('negq', [dest])]
                 return dest, stmts
             case BinOp(left, op, right):
-                dest, stmts = self.select_atomic(left, dest)
                 op_str = ''
                 match op:
                     case Add():
                         op_str = 'addq'
                     case Sub():
                         op_str = 'subq'
+
+                stmts = self.select_atomic(left, dest)
+
                 match right: 
                     case Constant(c):
                         stmts += [Instr(op_str, [Immediate(c), dest])]

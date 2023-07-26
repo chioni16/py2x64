@@ -6,7 +6,6 @@ from x86_ast import *
 from typing import Set, Dict, Tuple
 from priority_queue import PriorityQueue
 import itertools
-from pprint import pprint
 
 
 def align(val: int, mul: int) -> int:
@@ -176,24 +175,20 @@ class Compiler(compiler.Compiler):
             d[v][0] = n
             
             for nv in graph.out_edges(v):
-                d[nv.target][1] |= set([n])
-                q.increase_key(nv.target)
+                if isinstance(nv.target, Variable):
+                    d[nv.target][1] |= set([n])
+                    q.increase_key(nv.target)
 
             l -= 1
 
-        # print('colour_graph', d)
         return {k:v[0] for k,v in d.items()}
 
     def allocate_registers(self, graph: UndirectedAdjList) -> Tuple[Dict[Variable, arg], int]:
         vs = [v for v in graph.vertices() if isinstance(v, Variable)]
-        # print('alloc_reg', vs)
         colours = self.color_graph(graph, vs)
         fl = {k:(number_to_reg[v] if v < NUM_REGS_AVAIL else Deref('rbp',-8*(1+(v-NUM_REGS_AVAIL)))) for k,v in colours.items() }
         
-        # print('alloc_reg', colours)
-        # print('alloc_reg', fl)
         self.callee_regs_used = list(set(callee_saved_regs) & set(fl.values()))
-        print('callee', self.callee_regs_used)
         return fl, max(max([0] + list(colours.values())) - NUM_REGS_AVAIL, 0)
 
 
@@ -203,11 +198,9 @@ class Compiler(compiler.Compiler):
 
     def assign_homes(self, p: X86Program) -> X86Program:
         live_after = self.uncover_live(p)
-        # print('live_after:')
-        # pprint(live_after)
         graph = self.build_interference(p, live_after)
-        # with open('input.dot', 'w') as f:
-        #     f.write(graph.show().source)
+        with open('input.dot', 'w') as f:
+            f.write(graph.show().source)
         home, num_stack_spaces = self.allocate_registers(graph)
 
         self.count = num_stack_spaces
@@ -246,13 +239,13 @@ class Compiler(compiler.Compiler):
         ]
 
         epilog = [
-            *[Instr('pushq', [reg]) for reg in reversed(self.callee_regs_used)],
+            *[Instr('popq', [reg]) for reg in reversed(self.callee_regs_used)],
             Instr('popq', [Reg('rbp')]),
             Instr('retq', [])
         ]
 
         if count > 0:
-            prolog.push(Instr('subq', [Immediate(count), Reg('rsp')]))
+            prolog.append(Instr('subq', [Immediate(count), Reg('rsp')]))
             epilog.insert(0, Instr('addq', [Immediate(count), Reg('rsp')]))
 
         body = prolog + p.body + epilog

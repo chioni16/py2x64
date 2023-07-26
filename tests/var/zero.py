@@ -1,1 +1,2 @@
-print(0)
+a = 41
+print(a + 1)
