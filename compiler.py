@@ -29,6 +29,44 @@ def create_block(stmts: List[stmt], basic_blocks: Dict[str, List[stmt]]) -> List
             basic_blocks[label] = stmts
             return [Goto(label)]
 
+def cmpop_to_cc(op: cmpop) -> str:
+    match op:
+        case Eq():
+            return 'e'
+        case NotEq():
+            return 'ne'
+        case Lt():
+            return 'l'
+        case LtE():
+            return 'le'
+        case Gt():
+            return 'g'
+        case GtE():
+            return 'ge'
+        case _:
+            raise Exception('unreachable!')
+
+def binop_to_instr(op: operator) -> str:
+    match op:
+        case Add():
+            return 'addq'
+        case Sub():
+            return 'subq'
+        case _:
+            raise Exception('unreachable!')
+
+# very wip
+def get_compare(b: expr) -> expr:
+    match b:
+        case Compare(_):
+            return b
+        case Constant(True) | Constant(False):
+            return Compare(b, [Eq()], [True])
+        case Name(v):
+            return Compare(Variable(v), [Eq()], [True])
+        case _:
+            raise Exception('unreachable!')
+
 class Compiler:
     def __init__(self) -> None:
         self.count = 0
@@ -120,8 +158,10 @@ class Compiler:
             case IfExp(test, body, orelse):
                 # TODO
                 te, test_temps = self.rco_exp(test, False)
-                be, body_temps = self.rco_exp(body, True)
-                oe, orelse_temps = self.rco_exp(orelse, True)
+                # modified
+                be, body_temps = self.rco_exp(body, False)
+                # modified
+                oe, orelse_temps = self.rco_exp(orelse, False)
                 fe = IfExp(
                     te, 
                     Begin(bindings_to_stmts(body_temps), be), 
@@ -206,16 +246,22 @@ class Compiler:
             case Compare(_):
                 return [If(cnd, goto_thn, goto_els)]
             case UnaryOp(Not(), operand):
-                return [If(Compare(operand, [Eq()], [Constant(False)]), goto_thn, goto_els)]
+                return [If(Compare(operand, [Eq()], [Constant(True)]), goto_els, goto_thn)]
             case IfExp(test, body, orelse):
                 nbody = self.explicate_pred(body, goto_thn, goto_els, basic_blocks)
                 norelse = self.explicate_pred(orelse, goto_thn, goto_els, basic_blocks)
-                return [If(Compare(test, [Eq()], [Constant(False)]), create_block(norelse, basic_blocks), create_block(nbody, basic_blocks))]
+                # modified
+                # return [If(Compare(test, [Eq()], [Constant(True)]), create_block(nbody, basic_blocks), create_block(norelse, basic_blocks))]
+                assert isinstance(test, Compare), "got type: " + str(type(test))
+                return [If(test, create_block(nbody, basic_blocks), create_block(norelse, basic_blocks))]
             case Begin(body, result):
                 nbody = reduce(lambda acc, s: self.explicate_stmt(s, acc, basic_blocks), reversed(body), [])
-                return nbody + [If(Compare(result, [Eq()], [Constant(False)]), goto_els, goto_thn)]
+                # modified
+                # return nbody + [If(Compare(result, [Eq()], [Constant(True)]), goto_thn, goto_els)]
+                assert isinstance(result, Compare), "got type: " + str(type(result))
+                return nbody + [If(result, goto_thn, goto_els)]
             case _:
-                return [If(Compare(cnd, [Eq()], [Constant(False)]), goto_els, goto_thn)]
+                return [If(Compare(cnd, [Eq()], [Constant(True)]), goto_thn, goto_els)]
 
     def explicate_stmt(self, s: stmt, cont: List[stmt], basic_blocks: Dict[str, List[stmt]]) -> List[stmt]:
         match s:
@@ -244,16 +290,28 @@ class Compiler:
     def select_arg(self, e: expr) -> arg:
         # YOUR CODE HERE
         pass        
+
+    def select_comparison(self, e: expr) -> Tuple[str, List[instr]]:
+        match e:
+            case Compare(left, [op], [comparator]):
+                left_dest = Variable(generate_name('temp'))
+                left_stmts = self.select_atomic(left, left_dest)
+                comp_dest = Variable(generate_name('temp'))
+                comp_stmts = self.select_atomic(comparator, comp_dest)
+                return cmpop_to_cc(op), left_stmts + comp_stmts + [Instr('cmpq', [comp_dest, left_dest])]
+            case _:
+                raise Exception('unreachable!')
+
         
     def select_atomic(self, exp: expr, dest: location) -> List[stmt]:
         stmts = []
         match exp: 
             case Constant(c):
-                stmts += [Instr('movq', [Immediate(c), dest])]
+                stmts += [Instr('movq', [Immediate(int(c)), dest])]
             case Name(v):
                 stmts += [Instr('movq', [Variable(v), dest])]
             case _:
-                raise Exception('unreachable!!')
+                raise Exception('unreachable!')
         return stmts
 
     def select_exp(self, e: expr, dest: Optional[location]) -> Tuple[location, List[stmt]]:
@@ -261,27 +319,31 @@ class Compiler:
         # dest = dest or Reg('rax')
         match e:
             case Constant(c):
-                return dest, [Instr('movq', [Immediate(c), dest])]
+                return dest, [Instr('movq', [Immediate(int(c)), dest])]
             case Name(v):
                 return Variable(v), []
             case Call(Name('input_int'),[]):
                 return Reg('rax'), [Callq(label_name('read_int'), 0)]
-            case UnaryOp(USub(), exp):
+            case Compare(_):
+                cc, comparison_stmts = self.select_comparison(e)
+                stmts = [
+                    Instr('set' + cc, [ByteReg('al')]),
+                    Instr('movzbq', [ByteReg('al'), dest])
+                ]
+                return dest, comparison_stmts + stmts
+            case UnaryOp(op, exp):
                 stmts = self.select_atomic(exp, dest)
-                stmts += [Instr('negq', [dest])]
-                return dest, stmts
-            case BinOp(left, op, right):
-                op_str = ''
                 match op:
-                    case Add():
-                        op_str = 'addq'
-                    case Sub():
-                        op_str = 'subq'
+                    case USub():
+                        stmts += [Instr('negq', [dest])]
+                    case Not():
+                        stmts += [Instr('xorq', [Immediate(1), dest])]
                     case _:
                         raise Exception('unreachable!')
-
+                return dest, stmts
+            case BinOp(left, op, right):
+                op_str = binop_to_instr(op)
                 stmts = self.select_atomic(left, dest)
-
                 match right: 
                     case Constant(c):
                         stmts += [Instr(op_str, [Immediate(c), dest])]
@@ -309,12 +371,33 @@ class Compiler:
             case Expr(exp):
                 _, stmts = self.select_exp(exp, None)
                 return stmts
+            case Goto(l):
+                return [Jump(l)]
+            case If(test, [Goto(l1)], [Goto(l2)]):
+                cc, comparison_stmts = self.select_comparison(test)
+                stmts  = [
+                    JumpIf(cc, l1),
+                    Jump(l2)
+                ]
+                return comparison_stmts + stmts
+            case Return(v):
+                stmts = [Jump(label_name('conclusion'))]
+                if v:
+                    stmts = self.select_atomic(v, Reg('rax')) + stmts
+                return stmts
             case rest:
-                raise Exception('unreachable!'+ repr(rest)) 
+                raise Exception('unreachable!'+ repr(rest) + str(type(rest)))
 
-    # def select_instructions(self, p: Module) -> X86Program:
-    #     nl = flatten(map(self.select_stmt, p.body))
-    #     return X86Program(nl)
+    def select_instructions(self, p: CProgram | Module) -> X86Program:
+        match p:
+            case Module(body):
+                nbody = flatten(map(self.select_stmt, body))
+                return X86Program(nbody)
+            case CProgram(body):
+                nbody = {label: flatten(map(self.select_stmt, block)) for label, block in body.items()}
+                return CProgram(nbody)
+            case _:
+                raise Exception('unreachable!')
 
     ############################################################################
     # Assign Homes
