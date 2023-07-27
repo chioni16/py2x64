@@ -381,7 +381,8 @@ class Compiler:
                 ]
                 return comparison_stmts + stmts
             case Return(v):
-                stmts = [Jump(label_name('conclusion'))]
+                # stmts = [Jump(label_name('conclusion'))]
+                stmts = []
                 if v:
                     stmts = self.select_atomic(v, Reg('rax')) + stmts
                 return stmts
