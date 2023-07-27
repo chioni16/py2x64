@@ -4,6 +4,7 @@ from utils import *
 from x86_ast import *
 import os
 from typing import List, Optional, Tuple, Set, Dict, TypeVar
+from functools import reduce
 
 X = TypeVar('X')
 
@@ -176,11 +177,8 @@ class Compiler:
             case Call(_, _):
                 return [Expr(e)] + cont
             case Begin(body, _):
-                # TODO
-                new_body = cont.copy()
-                for s in reversed(body):
-                    new_body = self.explicate_stmt(s, new_body, basic_blocks)
-                return new_body
+                nbody = reduce(lambda acc, s: self.explicate_stmt(s, acc, basic_blocks), reversed(body), cont)
+                return nbody
             case _:
                 return cont
 
@@ -192,10 +190,8 @@ class Compiler:
                 norelse = self.explicate_assign(orelse, lhs, ncont, basic_blocks)
                 return self.explicate_pred(test, nbody, norelse, basic_blocks)
             case Begin(body, result):
-                new_body = [Assign([lhs], result)] + cont
-                for s in reversed(body):
-                    new_body = self.explicate_stmt(s, new_body, basic_blocks)
-                return new_body
+                nbody = reduce(lambda acc, s: self.explicate_stmt(s, acc, basic_blocks), reversed(body), [Assign([lhs], result)] + cont)
+                return nbody
             case _:
                 return [Assign([lhs], rhs)] + cont
 
@@ -212,15 +208,12 @@ class Compiler:
             case UnaryOp(Not(), operand):
                 return [If(Compare(operand, [Eq()], [Constant(False)]), goto_thn, goto_els)]
             case IfExp(test, body, orelse):
-                # TODO
-                nbody = self.explicate_pred(body, goto_thn.copy(), goto_els.copy(), basic_blocks)
-                norelse = self.explicate_pred(orelse, goto_thn.copy(), goto_els.copy(), basic_blocks)
+                nbody = self.explicate_pred(body, goto_thn, goto_els, basic_blocks)
+                norelse = self.explicate_pred(orelse, goto_thn, goto_els, basic_blocks)
                 return [If(Compare(test, [Eq()], [Constant(False)]), create_block(norelse, basic_blocks), create_block(nbody, basic_blocks))]
             case Begin(body, result):
-                new_body = []
-                for s in reversed(body):
-                    new_body = self.explicate_stmt(s, new_body, basic_blocks)
-                return new_body + [If(Compare(result, [Eq()], [Constant(False)]), goto_els, goto_thn)]
+                nbody = reduce(lambda acc, s: self.explicate_stmt(s, acc, basic_blocks), reversed(body), [])
+                return nbody + [If(Compare(result, [Eq()], [Constant(False)]), goto_els, goto_thn)]
             case _:
                 return [If(Compare(cnd, [Eq()], [Constant(False)]), goto_els, goto_thn)]
 
@@ -232,25 +225,17 @@ class Compiler:
                 return self.explicate_effect(value, cont, basic_blocks)
             case If(test, body, orelse):
                 ncont = create_block(cont, basic_blocks)
-                # TODO
-                nbody = ncont.copy()
-                for s in reversed(body):
-                    nbody = self.explicate_stmt(s, nbody, basic_blocks)
-                # TODO
-                norelse = ncont.copy()
-                for s in reversed(orelse):
-                    norelse = self.explicate_stmt(s, norelse, basic_blocks)
+                nbody = reduce(lambda acc, s: self.explicate_stmt(s, acc, basic_blocks), reversed(body), ncont)
+                norelse = reduce(lambda acc, s: self.explicate_stmt(s, acc, basic_blocks), reversed(orelse), ncont)
                 return self.explicate_pred(test, nbody, norelse, basic_blocks)
+            case _:
+                raise Exception('unreachable!')
                 
     def explicate_control(self, p: Module) -> CProgram:
-        match p:
-            case Module(body):
-                new_body = [Return(Constant(0))]
-                basic_blocks = {}
-                for s in reversed(body):
-                    new_body = self.explicate_stmt(s, new_body, basic_blocks)
-                basic_blocks[label_name('start')] = new_body
-                return CProgram(basic_blocks)
+        basic_blocks = {}
+        new_body = reduce(lambda acc, s: self.explicate_stmt(s, acc, basic_blocks), reversed(p.body), [Return(Constant(0))])
+        basic_blocks[label_name('start')] = new_body
+        return CProgram(basic_blocks)
 
     ############################################################################
     # Select Instructions
@@ -292,6 +277,8 @@ class Compiler:
                         op_str = 'addq'
                     case Sub():
                         op_str = 'subq'
+                    case _:
+                        raise Exception('unreachable!')
 
                 stmts = self.select_atomic(left, dest)
 
