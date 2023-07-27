@@ -381,8 +381,7 @@ class Compiler:
                 ]
                 return comparison_stmts + stmts
             case Return(v):
-                # stmts = [Jump(label_name('conclusion'))]
-                stmts = []
+                stmts = [Jump(label_name('conclusion'))]
                 if v:
                     stmts = self.select_atomic(v, Reg('rax')) + stmts
                 return stmts
@@ -396,6 +395,7 @@ class Compiler:
                 return X86Program(nbody)
             case CProgram(body):
                 nbody = {label: flatten(map(self.select_stmt, block)) for label, block in body.items()}
+                nbody[label_name('conclusion')] = []
                 return CProgram(nbody)
             case _:
                 raise Exception('unreachable!')
@@ -444,6 +444,10 @@ class Compiler:
 
     def patch_instr(self, i: instr) -> List[instr]:
         match i:
+            case Instr('cmpq', [op1, Immediate(v)]):
+                first = Instr('movq', [Immediate(v), Reg('rax')])
+                second = Instr('cmpq', [op1, Reg('rax')])
+                return [first, second]
             case Instr(op, [Deref(s_reg, s_delta), Deref(d_reg, d_delta)]):
                 first = Instr('movq', [Deref(s_reg, s_delta), Reg('rax')])
                 second = Instr(op, [Reg('rax'), Deref(d_reg, d_delta)])
@@ -455,9 +459,9 @@ class Compiler:
         patched_instrs = map(self.patch_instr, ss)
         return flatten(patched_instrs)
 
-    # def patch_instructions(self, p: X86Program) -> X86Program:
-    #     p.body = self.patch_instrs(p.body)
-    #     return p
+    def patch_instructions(self, p: X86Program) -> X86Program:
+        p.body = self.patch_instrs(p.body)
+        return p
 
     ############################################################################
     # Prelude & Conclusion

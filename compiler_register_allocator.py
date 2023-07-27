@@ -193,7 +193,10 @@ class Compiler(compiler.Compiler):
         for i in flatten(list(p.body.values())):
             las = live_after[i]
             match i:
-                case Instr('movq', [source, dest]):
+                case Instr('movq', [source, dest]) | Instr('movzbq', [source, dest]):
+                    if isinstance(source, ByteReg):
+                        source = bytereg_to_reg(source)
+
                     if isinstance(source, location):
                         ug.add_vertex(source)
                     if isinstance(dest, location):
@@ -303,41 +306,52 @@ class Compiler(compiler.Compiler):
     # Patch Instructions
     ###########################################################################
 
-    # def patch_instructions(self, p: X86Program) -> X86Program:
-    #     def remove_move_to_same_locations(i: instr):
-    #         match i:
-    #             case Instr('movq', [source, dest]) if source == dest:
-    #                 return False
-    #             case _:
-    #                 return True
+    def patch_instructions(self, p: X86Program) -> X86Program:
+        def remove_move_to_same_locations(i: instr):
+            match i:
+                case Instr('movq', [source, dest]) if source == dest:
+                    return False
+                case _:
+                    return True
         
-    #     nb = filter(remove_move_to_same_locations, p.body)
-    #     return super().patch_instructions(X86Program(nb))
+        nprogram = {}
+        for label, block in p.body.items():
+            nb = filter(remove_move_to_same_locations, block)
+            np = super().patch_instructions(X86Program(nb))
+            nprogram[label] = np.body
+        
+        return X86Program(nprogram)
+
 
     ###########################################################################
     # Prelude & Conclusion
     ###########################################################################
 
-    # def prelude_and_conclusion(self, p: X86Program) -> X86Program:
-    #     ncr = len(self.callee_regs_used)
-    #     nsp = self.count
-    #     count = align(8*(ncr + nsp), 16) - 8*ncr
+    def prelude_and_conclusion(self, p: X86Program) -> X86Program:
+        ncr = len(self.callee_regs_used)
+        nsp = self.count
+        count = align(8*(ncr + nsp), 16) - 8*ncr
 
-    #     prolog = [
-    #         Instr('pushq', [Reg('rbp')]),
-    #         Instr('movq', [Reg('rsp'), Reg('rbp')]),
-    #         *[Instr('pushq', [reg]) for reg in self.callee_regs_used],
-    #     ]
+        prolog = [
+            Instr('pushq', [Reg('rbp')]),
+            Instr('movq', [Reg('rsp'), Reg('rbp')]),
+            *[Instr('pushq', [reg]) for reg in self.callee_regs_used],
 
-    #     epilog = [
-    #         *[Instr('popq', [reg]) for reg in reversed(self.callee_regs_used)],
-    #         Instr('popq', [Reg('rbp')]),
-    #         Instr('retq', [])
-    #     ]
+            # jump to _start
+            # not really part of prolog
+            Instr('jmp', [label_name('start')]),
+        ]
 
-    #     if count > 0:
-    #         prolog.append(Instr('subq', [Immediate(count), Reg('rsp')]))
-    #         epilog.insert(0, Instr('addq', [Immediate(count), Reg('rsp')]))
+        epilog = [
+            *[Instr('popq', [reg]) for reg in reversed(self.callee_regs_used)],
+            Instr('popq', [Reg('rbp')]),
+            Instr('retq', [])
+        ]
 
-    #     body = prolog + p.body + epilog
-    #     return X86Program(body)
+        if count > 0:
+            prolog.append(Instr('subq', [Immediate(count), Reg('rsp')]))
+            epilog.insert(0, Instr('addq', [Immediate(count), Reg('rsp')]))
+
+        p.body[label_name('main')] = prolog
+        p.body[label_name('conclusion')] = epilog
+        return X86Program(p.body)

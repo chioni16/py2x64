@@ -26,3 +26,7 @@ if not not not c == 0:
     else:
         a = 46
 print(a + 1)
+x = 2 == 3
+if not x:
+    print(1)
+
