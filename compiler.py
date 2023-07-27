@@ -3,16 +3,95 @@ from ast import *
 from utils import *
 from x86_ast import *
 import os
-from typing import List, Optional, Tuple, Set, Dict
-from utils import generate_name, label_name
+from typing import List, Optional, Tuple, Set, Dict, TypeVar
+
+X = TypeVar('X')
 
 Binding = Tuple[Name, expr]
 Temporaries = List[Binding]
+
+def bindings_to_stmts(temps: Temporaries) -> List[stmt]:
+    names = map(lambda temp: temp[0], temps)
+    temp_exps = map(lambda temp: temp[1], temps)
+    temps = list(map(lambda name, temp_exp: Assign([name], temp_exp), names, temp_exps))
+    return temps
+
+def flatten(ll: Iterable[List[X]]) -> List[X]:
+    return [i for l in ll for i in l]
+
+def create_block(stmts: List[stmt], basic_blocks: Dict[str, List[stmt]]) -> List[stmt]:
+    match stmts:
+        case [Goto(_)]:
+            return stmts
+        case _:
+            label = label_name(generate_name('block'))
+            basic_blocks[label] = stmts
+            return [Goto(label)]
 
 class Compiler:
     def __init__(self) -> None:
         self.count = 0
 
+    ############################################################################
+    # Shrink
+    ############################################################################
+
+    def shrink_expr(self, e: expr) -> expr:
+        match e:
+            case Constant(_) | Name(_) | Call(Name('input_int'), []):
+                return e
+            case UnaryOp(op, e):
+                ne = self.shrink_expr(e)
+                return UnaryOp(op, ne)
+            case BinOp(left, op, right):
+                nleft = self.shrink_expr(left)
+                nright = self.shrink_expr(right)
+                return BinOp(nleft, op, nright)
+            case BoolOp(boolop, [first, second]):
+                nfirst = self.shrink_expr(first)
+                nsecond = self.shrink_expr(second)
+                match boolop:
+                    case And():
+                        return IfExp(nfirst, nsecond, Constant(False))
+                    case Or():
+                        return IfExp(nfirst, Constant(True), nsecond)
+                    case _:
+                        raise Exception('unreachable!')
+            case Compare(left, ops, comparators):
+                nleft = self.shrink_expr(left)
+                ncomparators = list(map(self.shrink_expr, comparators))
+                return Compare(nleft, ops, ncomparators)
+            case IfExp(test, body, orelse):
+                ntest = self.shrink_expr(test)
+                nbody = self.shrink_expr(body)
+                norelse = self.shrink_expr(orelse)
+                return IfExp(ntest, nbody, norelse)
+            case _:
+                raise Exception('unreachable!')
+
+    def shrink_stmt(self, i: stmt) -> stmt:
+        match i:
+            case Assign(v, e):
+                ne = self.shrink_expr(e)
+                return Assign(v, ne)
+            case Expr(Call(Name('print'),[e])):
+                ne = self.shrink_expr(e)
+                return Expr(Call(Name('print'),[ne]))
+            case Expr(e):
+                ne = self.shrink_expr(e)
+                return Expr(ne)
+            case If(cond, body, orelse):
+                ncond = self.shrink_expr(cond)
+                nbody = list(map(self.shrink_stmt, body))
+                norelse = list(map(self.shrink_stmt, orelse))
+                return If(ncond, nbody, norelse)
+            case _:
+                raise Exception('unreachable!')
+
+    def shrink(self, program: Module) -> Module:
+        nbody = list(map(self.shrink_stmt, program.body))
+        return Module(nbody)
+        
     ############################################################################
     # Remove Complex Operands
     ############################################################################
@@ -21,77 +100,157 @@ class Compiler:
         match e:
             case Constant(_) | Name(_):
                 return e, []
-            case Call(Name('input_int'),[]):
-                if need_atomic:
-                    name = Name(generate_name('temp'))
-                    return name, [(name, Call(Name('input_int'),[]))]
-                return e, []
-            case UnaryOp(USub(), exp):
-                inner_final_exp, inner_temps = self.rco_exp(exp, True)
-                match inner_final_exp:
-                    case Constant(_) | Name(_):
-                        pass
-                    case _:
-                        inner_name = Name(generate_name('temp'))
-                        inner_temps = inner_temps + [(inner_name, inner_final_exp)]
-                        inner_final_exp = inner_name
-                return UnaryOp(USub(), inner_final_exp), inner_temps
+            case Call(_, _):
+                fe, temps = e, []
+            case UnaryOp(op, exp):
+                ie, temps = self.rco_exp(exp, True)
+                fe = UnaryOp(op, ie)
             case BinOp(left, op, right):
-                left_final_exp, left_temps = self.rco_exp(left, True)
-                match left_final_exp:
-                    case Constant(_) | Name(_):
-                        pass
-                    case _:
-                        left_name = Name(generate_name('temp'))
-                        left_temps = left_temps + [(left_name, left_final_exp)]
-                        left_final_exp = left_name
+                le, left_temps = self.rco_exp(left, True)
+                re, right_temps = self.rco_exp(right, True)
+                fe, temps = BinOp(le, op, re), left_temps + right_temps
+            case Compare(left, ops, comparators):
+                le, left_temps = self.rco_exp(left, True)
 
-                right_final_exp, right_temps = self.rco_exp(right, True)
-                match right_final_exp:
-                    case Constant(_) | Name(_):
-                        pass
-                    case _:
-                        right_name = Name(generate_name('temp'))
-                        right_temps = right_temps + [(right_name, right_final_exp)]
-                        right_final_exp = right_name
+                [ce, comp_temps] = list(zip(*map(lambda comp: self.rco_exp(comp, True), comparators)))
+                ce, comp_temps = list(ce), flatten(comp_temps)
 
-                return BinOp(left_final_exp, op, right_final_exp), left_temps + right_temps
+                fe, temps = Compare(le, ops, ce), left_temps + comp_temps
+            case IfExp(test, body, orelse):
+                # TODO
+                te, test_temps = self.rco_exp(test, False)
+                be, body_temps = self.rco_exp(body, True)
+                oe, orelse_temps = self.rco_exp(orelse, True)
+                fe = IfExp(
+                    te, 
+                    Begin(bindings_to_stmts(body_temps), be), 
+                    Begin(bindings_to_stmts(orelse_temps), oe)
+                )
+                temps = test_temps
             case _:
                 raise Exception('unreachable!')
-
-
+        
+        if need_atomic:
+            name = Name(generate_name('temp'))
+            return name, temps + [(name, fe)]
+        return fe, temps
 
     def rco_stmt(self, s: stmt) -> List[stmt]:
-        def helper(temps):
-            names = map(lambda temp: temp[0], temps)
-            temp_exps = map(lambda temp: temp[1], temps)
-            temps = list(map(lambda name, temp_exp: Assign([name], temp_exp), names, temp_exps))
-            return temps
-
         match s:
             case Assign([Name(var)], exp):
-                final_exp, temps = self.rco_exp(exp, False)
-                return helper(temps) + [Assign([Name(var)], final_exp)]
+                exp, temps = self.rco_exp(exp, False)
+                fs = Assign([Name(var)], exp)
             case Expr(Call(Name('print'),[exp])):
-                final_exp, temps = self.rco_exp(exp, True)
-                match final_exp:
-                    case Constant(_) | Name(_):
-                        pass
-                    case _:
-                        final_name = Name(generate_name('temp'))
-                        temps = temps + [(final_name, final_exp)]
-                        final_exp = final_name
-                return helper(temps) + [Expr(Call(Name('print'), [final_exp]))]
+                exp, temps = self.rco_exp(exp, True)
+                fs = Expr(Call(Name('print'), [exp]))
             case Expr(exp):
-                final_exp, temps = self.rco_exp(exp, True)
-                return helper(temps) + [Expr(final_exp)]
+                exp, temps = self.rco_exp(exp, False)
+                fs = Expr(exp)
+            case If(cond, body, orelse):
+                # TODO
+                ce, temps = self.rco_exp(cond, False)
+                nbody = flatten(map(self.rco_stmt, body))
+                norelse = flatten(map(self.rco_stmt, orelse))
+                fs = If(ce, nbody, norelse)
             case _:
                 raise Exception('unreachable!')
 
+        temps = bindings_to_stmts(temps)
+        return temps + [fs]
+
     def remove_complex_operands(self, p: Module) -> Module:
-        l = map(self.rco_stmt, p.body)
-        nl = [item for sl in l for item in sl]
+        nl = flatten(map(self.rco_stmt, p.body))
         return Module(nl)
+
+    ############################################################################
+    # Explicate Control
+    ############################################################################
+
+    def explicate_effect(self, e: expr, cont: List[stmt], basic_blocks: Dict[str, List[stmt]]) -> List[stmt]:
+        match e:
+            case IfExp(test, body, orelse):
+                ncont = create_block(cont, basic_blocks)
+                nbody = self.explicate_effect(body, ncont, basic_blocks)
+                norelse = self.explicate_effect(orelse, ncont, basic_blocks)
+                return self.explicate_pred(test, nbody, norelse, basic_blocks)
+            case Call(_, _):
+                return [Expr(e)] + cont
+            case Begin(body, _):
+                # TODO
+                new_body = cont.copy()
+                for s in reversed(body):
+                    new_body = self.explicate_stmt(s, new_body, basic_blocks)
+                return new_body
+            case _:
+                return cont
+
+    def explicate_assign(self, rhs: expr, lhs: Name, cont: List[stmt], basic_blocks: Dict[str, List[stmt]]) -> List[stmt]:
+        match rhs:
+            case IfExp(test, body, orelse):
+                ncont = create_block(cont, basic_blocks)
+                nbody = self.explicate_assign(body, lhs, ncont, basic_blocks)
+                norelse = self.explicate_assign(orelse, lhs, ncont, basic_blocks)
+                return self.explicate_pred(test, nbody, norelse, basic_blocks)
+            case Begin(body, result):
+                new_body = [Assign([lhs], result)] + cont
+                for s in reversed(body):
+                    new_body = self.explicate_stmt(s, new_body, basic_blocks)
+                return new_body
+            case _:
+                return [Assign([lhs], rhs)] + cont
+
+    def explicate_pred(self, cnd: expr, thn: List[stmt], els: List[stmt], basic_blocks: Dict[str, List[stmt]]) -> List[stmt]:
+        goto_thn = create_block(thn, basic_blocks)
+        goto_els = create_block(els, basic_blocks)
+        match cnd:
+            case Constant(True):
+                return thn
+            case Constant(False):
+                return els
+            case Compare(_):
+                return [If(cnd, goto_thn, goto_els)]
+            case UnaryOp(Not(), operand):
+                return [If(Compare(operand, [Eq()], [Constant(False)]), goto_thn, goto_els)]
+            case IfExp(test, body, orelse):
+                # TODO
+                nbody = self.explicate_pred(body, goto_thn.copy(), goto_els.copy(), basic_blocks)
+                norelse = self.explicate_pred(orelse, goto_thn.copy(), goto_els.copy(), basic_blocks)
+                return [If(Compare(test, [Eq()], [Constant(False)]), create_block(norelse, basic_blocks), create_block(nbody, basic_blocks))]
+            case Begin(body, result):
+                new_body = []
+                for s in reversed(body):
+                    new_body = self.explicate_stmt(s, new_body, basic_blocks)
+                return new_body + [If(Compare(result, [Eq()], [Constant(False)]), goto_els, goto_thn)]
+            case _:
+                return [If(Compare(cnd, [Eq()], [Constant(False)]), goto_els, goto_thn)]
+
+    def explicate_stmt(self, s: stmt, cont: List[stmt], basic_blocks: Dict[str, List[stmt]]) -> List[stmt]:
+        match s:
+            case Assign([lhs], rhs):
+                return self.explicate_assign(rhs, lhs, cont, basic_blocks)
+            case Expr(value):
+                return self.explicate_effect(value, cont, basic_blocks)
+            case If(test, body, orelse):
+                ncont = create_block(cont, basic_blocks)
+                # TODO
+                nbody = ncont.copy()
+                for s in reversed(body):
+                    nbody = self.explicate_stmt(s, nbody, basic_blocks)
+                # TODO
+                norelse = ncont.copy()
+                for s in reversed(orelse):
+                    norelse = self.explicate_stmt(s, norelse, basic_blocks)
+                return self.explicate_pred(test, nbody, norelse, basic_blocks)
+                
+    def explicate_control(self, p: Module) -> CProgram:
+        match p:
+            case Module(body):
+                new_body = [Return(Constant(0))]
+                basic_blocks = {}
+                for s in reversed(body):
+                    new_body = self.explicate_stmt(s, new_body, basic_blocks)
+                basic_blocks[label_name('start')] = new_body
+                return CProgram(basic_blocks)
 
     ############################################################################
     # Select Instructions
@@ -163,13 +322,12 @@ class Compiler:
             case Expr(exp):
                 _, stmts = self.select_exp(exp, None)
                 return stmts
-            case _:
-                raise Exception('unreachable!')
+            case rest:
+                raise Exception('unreachable!'+ repr(rest)) 
 
-    def select_instructions(self, p: Module) -> X86Program:
-        l = map(self.select_stmt, p.body) 
-        nl = [item for sl in l for item in sl]
-        return X86Program(nl)
+    # def select_instructions(self, p: Module) -> X86Program:
+    #     nl = flatten(map(self.select_stmt, p.body))
+    #     return X86Program(nl)
 
     ############################################################################
     # Assign Homes
@@ -202,10 +360,10 @@ class Compiler:
                             home: Dict[Variable, arg]) -> List[instr]:
         return list(map(lambda s: self.assign_homes_instr(s, home), ss))
 
-    def assign_homes(self, p: X86Program) -> X86Program:
-        self.count = 0
-        p.body = self.assign_homes_instrs(p.body, {})
-        return p
+    # def assign_homes(self, p: X86Program) -> X86Program:
+    #     self.count = 0
+    #     p.body = self.assign_homes_instrs(p.body, {})
+    #     return p
 
         
 
@@ -224,30 +382,30 @@ class Compiler:
 
     def patch_instrs(self, ss: List[instr]) -> List[instr]:
         patched_instrs = map(self.patch_instr, ss)
-        return [item for sl in patched_instrs for item in sl]
+        return flatten(patched_instrs)
 
-    def patch_instructions(self, p: X86Program) -> X86Program:
-        p.body = self.patch_instrs(p.body)
-        return p
+    # def patch_instructions(self, p: X86Program) -> X86Program:
+    #     p.body = self.patch_instrs(p.body)
+    #     return p
 
     ############################################################################
     # Prelude & Conclusion
     ############################################################################
 
-    def prelude_and_conclusion(self, p: X86Program) -> X86Program:
-        prolog = [
-            Instr('pushq', [Reg('rbp')]),
-            Instr('movq', [Reg('rsp'), Reg('rbp')]),
-            Instr('subq', [Immediate(8*self.count), Reg('rsp')])
-        ]
+    # def prelude_and_conclusion(self, p: X86Program) -> X86Program:
+    #     prolog = [
+    #         Instr('pushq', [Reg('rbp')]),
+    #         Instr('movq', [Reg('rsp'), Reg('rbp')]),
+    #         Instr('subq', [Immediate(8*self.count), Reg('rsp')])
+    #     ]
 
-        epilog = [
-            Instr('addq', [Immediate(8*self.count), Reg('rsp')]),
-            Instr('popq', [Reg('rbp')]),
-            Instr('retq', [])
-        ]
+    #     epilog = [
+    #         Instr('addq', [Immediate(8*self.count), Reg('rsp')]),
+    #         Instr('popq', [Reg('rbp')]),
+    #         Instr('retq', [])
+    #     ]
 
-        body = prolog + p.body + epilog
+    #     body = prolog + p.body + epilog
 
-        return X86Program(body)
+    #     return X86Program(body)
 

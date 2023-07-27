@@ -196,57 +196,57 @@ class Compiler(compiler.Compiler):
     # Assign Homes
     ############################################################################
 
-    def assign_homes(self, p: X86Program) -> X86Program:
-        live_after = self.uncover_live(p)
-        graph = self.build_interference(p, live_after)
-        with open('input.dot', 'w') as f:
-            f.write(graph.show().source)
-        home, num_stack_spaces = self.allocate_registers(graph)
+    # def assign_homes(self, p: X86Program) -> X86Program:
+    #     live_after = self.uncover_live(p)
+    #     graph = self.build_interference(p, live_after)
+    #     with open('input.dot', 'w') as f:
+    #         f.write(graph.show().source)
+    #     home, num_stack_spaces = self.allocate_registers(graph)
 
-        self.count = num_stack_spaces
-        p.body = self.assign_homes_instrs(p.body, home)
-        return p
+    #     self.count = num_stack_spaces
+    #     p.body = self.assign_homes_instrs(p.body, home)
+    #     return p
 
 
     ###########################################################################
     # Patch Instructions
     ###########################################################################
 
-    def patch_instructions(self, p: X86Program) -> X86Program:
-        def remove_move_to_same_locations(i: instr):
-            match i:
-                case Instr('movq', [source, dest]) if source == dest:
-                    return False
-                case _:
-                    return True
+    # def patch_instructions(self, p: X86Program) -> X86Program:
+    #     def remove_move_to_same_locations(i: instr):
+    #         match i:
+    #             case Instr('movq', [source, dest]) if source == dest:
+    #                 return False
+    #             case _:
+    #                 return True
         
-        nb = filter(remove_move_to_same_locations, p.body)
-        return super().patch_instructions(X86Program(nb))
+    #     nb = filter(remove_move_to_same_locations, p.body)
+    #     return super().patch_instructions(X86Program(nb))
 
     ###########################################################################
     # Prelude & Conclusion
     ###########################################################################
 
-    def prelude_and_conclusion(self, p: X86Program) -> X86Program:
-        ncr = len(self.callee_regs_used)
-        nsp = self.count
-        count = align(8*(ncr + nsp), 16) - 8*ncr
+    # def prelude_and_conclusion(self, p: X86Program) -> X86Program:
+    #     ncr = len(self.callee_regs_used)
+    #     nsp = self.count
+    #     count = align(8*(ncr + nsp), 16) - 8*ncr
 
-        prolog = [
-            Instr('pushq', [Reg('rbp')]),
-            Instr('movq', [Reg('rsp'), Reg('rbp')]),
-            *[Instr('pushq', [reg]) for reg in self.callee_regs_used],
-        ]
+    #     prolog = [
+    #         Instr('pushq', [Reg('rbp')]),
+    #         Instr('movq', [Reg('rsp'), Reg('rbp')]),
+    #         *[Instr('pushq', [reg]) for reg in self.callee_regs_used],
+    #     ]
 
-        epilog = [
-            *[Instr('popq', [reg]) for reg in reversed(self.callee_regs_used)],
-            Instr('popq', [Reg('rbp')]),
-            Instr('retq', [])
-        ]
+    #     epilog = [
+    #         *[Instr('popq', [reg]) for reg in reversed(self.callee_regs_used)],
+    #         Instr('popq', [Reg('rbp')]),
+    #         Instr('retq', [])
+    #     ]
 
-        if count > 0:
-            prolog.append(Instr('subq', [Immediate(count), Reg('rsp')]))
-            epilog.insert(0, Instr('addq', [Immediate(count), Reg('rsp')]))
+    #     if count > 0:
+    #         prolog.append(Instr('subq', [Immediate(count), Reg('rsp')]))
+    #         epilog.insert(0, Instr('addq', [Immediate(count), Reg('rsp')]))
 
-        body = prolog + p.body + epilog
-        return X86Program(body)
+    #     body = prolog + p.body + epilog
+    #     return X86Program(body)
